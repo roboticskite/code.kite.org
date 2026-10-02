@@ -113,6 +113,14 @@ export default function App() {
     });
   }, [project.sprites]);
 
+  useEffect(() => {
+    const backdropIndex = Math.max(0, Math.min(project.currentBackdrop, project.backdrops.length - 1));
+    if (engineRef.current) engineRef.current.ctx.backdrop = backdropIndex;
+    setRuntimeState((current) => current.backdrop === backdropIndex
+      ? current
+      : { ...current, backdrop: backdropIndex });
+  }, [project.backdrops.length, project.currentBackdrop]);
+
   const handleRun = useCallback(() => {
     const ws = blocklyRef.current?.getWorkspace();
     if (!ws) return;
