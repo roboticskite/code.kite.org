@@ -10,6 +10,19 @@ interface ToolboxCategory {
 
 export const TOOLBOX_CATEGORIES: ToolboxCategory[] = [
   {
+    name: "Events",
+    colour: "#ffbf00",
+    blocks: [
+      { type: "event_when_flag" },
+      { type: "event_when_key" },
+      { type: "event_when_clicked" },
+      { type: "event_when_start" },
+      { type: "event_broadcast" },
+      { type: "event_broadcast_wait" },
+      { type: "event_when_receive" },
+    ],
+  },
+  {
     name: "Motion",
     colour: "#4c97ff",
     blocks: [
@@ -55,19 +68,6 @@ export const TOOLBOX_CATEGORIES: ToolboxCategory[] = [
       { type: "sound_change_volume" },
       { type: "sound_set_volume" },
       { type: "sound_play_note" },
-    ],
-  },
-  {
-    name: "Events",
-    colour: "#ffbf00",
-    blocks: [
-      { type: "event_when_flag" },
-      { type: "event_when_key" },
-      { type: "event_when_clicked" },
-      { type: "event_when_start" },
-      { type: "event_broadcast" },
-      { type: "event_broadcast_wait" },
-      { type: "event_when_receive" },
     ],
   },
   {
@@ -205,6 +205,7 @@ export function buildToolboxJson(): any {
       kind: "category",
       name: cat.name,
       colour: cat.colour,
+      cssConfig: categoryCssConfig(cat.name),
       contents: cat.blocks.map((b) => ({ kind: "block", type: b.type })),
     });
   }
@@ -223,8 +224,18 @@ export function buildBeginnerToolboxJson(): any {
       kind: "category",
       name: cat.name,
       colour: cat.colour,
+      cssConfig: categoryCssConfig(cat.name),
       contents: cat.blocks.map((b) => ({ kind: "block", type: b.type })),
     });
   }
   return obj;
+}
+
+function categoryCssConfig(name: string) {
+  const className = `blocklyCategory${name.replace(/[^a-zA-Z0-9]/g, "")}`;
+  return {
+    row: `${className}Row`,
+    icon: `${className}Icon`,
+    label: `${className}Label`,
+  };
 }

@@ -67,28 +67,114 @@
 
 /* Blockly theme overrides */
 .blocklyToolboxDiv {
-  background: #f8fafc !important;
+  width: 78px !important;
+  background: #ffffff !important;
   border-right: 1px solid #e2e8f0 !important;
-  padding: 8px !important;
+  padding: 6px 2px !important;
 }
-.blocklyTreeRow {
+.blocklyTreeRow,
+.blocklyToolboxDiv [class^="blocklyCategory"][class*="Row"] {
+  display: flex !important;
+  height: 58px !important;
+  width: 72px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 1px auto !important;
+  padding: 3px 0 !important;
+  border: 0 !important;
   border-radius: 8px !important;
-  margin-bottom: 4px !important;
-  padding: 6px 8px !important;
-  height: auto !important;
-  line-height: 1.4 !important;
-  transition: all 0.15s ease !important;
+  line-height: 1.1 !important;
+  transition: background-color 0.15s ease !important;
 }
-.blocklyTreeRow:hover {
-  background: #e2e8f0 !important;
+.blocklyTreeRow:hover,
+.blocklyToolboxDiv [class^="blocklyCategory"][class*="Row"]:hover {
+  background: #f1f5f9 !important;
 }
 .blocklyTreeSelected {
-  background: #dbeafe !important;
+  background: #eaf2ff !important;
 }
-.blocklyTreeLabel {
+.blocklyTreeRowContentContainer {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 3px !important;
+  width: 100% !important;
+}
+.blocklyTreeIcon,
+.blocklyToolboxDiv [class$="Icon"] {
+  display: grid !important;
+  width: 28px !important;
+  height: 28px !important;
+  margin: 0 !important;
+  place-items: center !important;
+  border-radius: 50% !important;
+  background: var(--category-color, #64748b) !important;
+  color: #ffffff !important;
+}
+.blocklyTreeIcon::after,
+.blocklyToolboxDiv [class$="Icon"]::after {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+.blocklyCategoryEventsIcon { --category-color: #ffbf00; }
+.blocklyCategoryEventsIcon::after { content: "⚑"; }
+.blocklyCategoryMotionIcon { --category-color: #4c97ff; }
+.blocklyCategoryMotionIcon::after { content: "↕"; }
+.blocklyCategoryLooksIcon { --category-color: #9966ff; }
+.blocklyCategoryLooksIcon::after { content: "◉"; }
+.blocklyCategorySoundIcon { --category-color: #cf63cf; }
+.blocklyCategorySoundIcon::after { content: "♫"; }
+.blocklyCategoryControlIcon { --category-color: #ffab19; }
+.blocklyCategoryControlIcon::after { content: "↻"; }
+.blocklyCategorySensingIcon { --category-color: #5cb1d6; }
+.blocklyCategorySensingIcon::after { content: "◎"; }
+.blocklyCategoryOperatorsIcon { --category-color: #59c059; }
+.blocklyCategoryOperatorsIcon::after { content: "Σ"; }
+.blocklyCategoryVariablesIcon { --category-color: #ff8c1a; }
+.blocklyCategoryVariablesIcon::after { content: "x"; }
+.blocklyCategoryFunctionsIcon { --category-color: #ff6680; }
+.blocklyCategoryFunctionsIcon::after { content: "ƒ"; }
+.blocklyCategoryDrawingIcon { --category-color: #d18ab9; }
+.blocklyCategoryDrawingIcon::after { content: "✎"; }
+.blocklyCategoryGameIcon { --category-color: #4caf50; }
+.blocklyCategoryGameIcon::after { content: "⊞"; }
+.blocklyCategoryAdvancedIcon { --category-color: #795548; }
+.blocklyCategoryAdvancedIcon::after { content: "⌘"; }
+.blocklyTreeLabel,
+.blocklyToolboxDiv [class$="Label"] {
   font-family: "Inter", sans-serif !important;
   font-weight: 600 !important;
-  font-size: 13px !important;
+  max-width: 72px !important;
+  overflow: hidden !important;
+  font-size: 10px !important;
+  line-height: 1.1 !important;
+  text-align: center !important;
+  text-overflow: ellipsis !important;
+}
+.palette-tab {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 10px;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.palette-tab-active {
+  border-bottom-color: #6b21a8;
+  color: #5b168b;
+}
+.palette-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 .blocklyFlyoutBackground {
   fill: #f1f5f9 !important;
