@@ -17,6 +17,7 @@ interface Props {
   onMouseMove: (x: number, y: number) => void;
   onMouseDown: () => void;
   onMouseUp: () => void;
+  onPenCanvasReady: (canvas: HTMLCanvasElement) => void;
   fullscreen: boolean;
   stageSize: { width: number; height: number };
   visibleVariables: { name: string; value: any }[];
@@ -29,6 +30,7 @@ export default function StageCanvas({
   onMouseMove,
   onMouseDown,
   onMouseUp,
+  onPenCanvasReady,
   fullscreen,
   stageSize,
   visibleVariables,
@@ -207,8 +209,9 @@ export default function StageCanvas({
     if (penCanvas) {
       penCanvas.width = stageSize.width;
       penCanvas.height = stageSize.height;
+      onPenCanvasReady(penCanvas);
     }
-  }, [stageSize]);
+  }, [stageSize, onPenCanvasReady]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;

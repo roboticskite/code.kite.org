@@ -14,6 +14,8 @@ interface EditorState {
   showSettings: boolean;
   showHelp: boolean;
   fullscreen: boolean;
+  theme: "light" | "dark";
+  appearance: "default" | "dark" | "chalk";
   undoStack: string[];
   redoStack: string[];
   zoom: number;
@@ -45,6 +47,8 @@ interface EditorState {
   toggleSettings: () => void;
   toggleHelp: () => void;
   toggleFullscreen: () => void;
+  setAppearance: (appearance: "default" | "dark" | "chalk") => void;
+  toggleTheme: () => void;
   setZoom: (zoom: number) => void;
   setSearchQuery: (q: string) => void;
   pushUndo: () => void;
@@ -150,6 +154,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   showSettings: false,
   showHelp: false,
   fullscreen: false,
+  theme: "light",
+  appearance: "default",
   undoStack: [],
   redoStack: [],
   zoom: 100,
@@ -318,6 +324,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleSettings: () => set((s) => ({ showSettings: !s.showSettings })),
   toggleHelp: () => set((s) => ({ showHelp: !s.showHelp })),
   toggleFullscreen: () => set((s) => ({ fullscreen: !s.fullscreen })),
+  setAppearance: (appearance) =>
+    set(() => ({
+      appearance,
+      theme: appearance === "dark" ? "dark" : "light",
+    })),
+  toggleTheme: () =>
+    set((s) => ({
+      theme: s.theme === "light" ? "dark" : "light",
+      appearance: s.theme === "light" ? "dark" : "default",
+    })),
 
   setZoom: (zoom) => set({ zoom: Math.max(50, Math.min(200, zoom)) }),
   setSearchQuery: (q) => set({ searchQuery: q }),

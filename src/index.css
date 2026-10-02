@@ -100,3 +100,189 @@
 .blocklyWsDrag {
   cursor: grab;
 }
+
+.app-theme-default {
+  --theme-app-bg: #f9fafb;
+  --theme-text: #111827;
+  color: var(--theme-text);
+  background: var(--theme-app-bg);
+  color-scheme: light;
+}
+
+.app-theme-dark {
+  --theme-app-bg: #111827;
+  --theme-surface: #1f2937;
+  --theme-surface-alt: #273449;
+  --theme-border: #475569;
+  --theme-text: #f3f4f6;
+  --theme-muted: #cbd5e1;
+  --theme-input: #111827;
+  color: var(--theme-text);
+  background: var(--theme-app-bg);
+  color-scheme: dark;
+}
+
+.app-theme-chalk {
+  --theme-app-bg: #e7efe3;
+  --theme-surface: #f4f8f1;
+  --theme-surface-alt: #dce8d7;
+  --theme-border: #b7c9b0;
+  --theme-text: #263b2b;
+  --theme-muted: #526b57;
+  --theme-input: #fbfdf9;
+  color: var(--theme-text);
+  background: var(--theme-app-bg);
+  color-scheme: light;
+}
+
+.app-theme-dark [class*="bg-white"],
+.app-theme-dark [class*="bg-gray-50"],
+.app-theme-dark [class*="bg-gray-100"],
+.app-theme-dark [class*="bg-gray-200"],
+.app-theme-dark [class*="bg-slate-50"],
+.app-theme-dark [class*="bg-slate-100"],
+.app-theme-dark [class*="bg-slate-200"],
+.app-theme-dark [class*="bg-green-50"],
+.app-theme-dark [class*="bg-orange-50"],
+.app-theme-dark [class*="bg-red-50"],
+.app-theme-dark [class*="bg-purple-50"],
+.app-theme-dark [class*="bg-kite-50"] {
+  background-color: var(--theme-surface) !important;
+}
+
+.app-theme-chalk [class*="bg-white"],
+.app-theme-chalk [class*="bg-gray-50"],
+.app-theme-chalk [class*="bg-gray-100"],
+.app-theme-chalk [class*="bg-gray-200"],
+.app-theme-chalk [class*="bg-slate-50"],
+.app-theme-chalk [class*="bg-slate-100"],
+.app-theme-chalk [class*="bg-slate-200"],
+.app-theme-chalk [class*="bg-green-50"],
+.app-theme-chalk [class*="bg-orange-50"],
+.app-theme-chalk [class*="bg-red-50"],
+.app-theme-chalk [class*="bg-purple-50"],
+.app-theme-chalk [class*="bg-kite-50"] {
+  background-color: var(--theme-surface-alt) !important;
+}
+
+.app-theme-dark [class*="bg-gradient-to-"],
+.app-theme-chalk [class*="bg-gradient-to-"] {
+  background-image: none !important;
+  background-color: var(--theme-surface) !important;
+}
+
+.app-theme-dark [class*="text-gray-"],
+.app-theme-dark [class*="text-slate-"],
+.app-theme-dark [class*="text-[#2b422f]"],
+.app-theme-dark [class*="text-[#233d29]"] {
+  color: var(--theme-text) !important;
+}
+
+.app-theme-chalk [class*="text-gray-"],
+.app-theme-chalk [class*="text-slate-"] {
+  color: var(--theme-text) !important;
+}
+
+.app-theme-dark [class*="border-gray-"],
+.app-theme-dark [class*="border-slate-"] {
+  border-color: var(--theme-border) !important;
+}
+
+.app-theme-chalk [class*="border-gray-"],
+.app-theme-chalk [class*="border-slate-"] {
+  border-color: var(--theme-border) !important;
+}
+
+.app-theme-dark input:not([type="range"]),
+.app-theme-dark textarea,
+.app-theme-dark select {
+  color: var(--theme-text) !important;
+  background-color: var(--theme-input) !important;
+  border-color: var(--theme-border) !important;
+}
+
+.app-theme-chalk input:not([type="range"]),
+.app-theme-chalk textarea,
+.app-theme-chalk select {
+  color: var(--theme-text) !important;
+  background-color: var(--theme-input) !important;
+  border-color: var(--theme-border) !important;
+}
+
+.app-theme-dark input::placeholder,
+.app-theme-dark textarea::placeholder {
+  color: var(--theme-muted) !important;
+}
+
+.app-theme-chalk input::placeholder,
+.app-theme-chalk textarea::placeholder {
+  color: var(--theme-muted) !important;
+}
+
+.app-theme-dark .app-themed-header {
+  background: #202b3b !important;
+  border-color: #3e4d60 !important;
+}
+
+.app-theme-chalk .app-themed-header {
+  background: #34553a !important;
+  border-color: #29462f !important;
+}
+
+.app-theme-dark .app-fullscreen-toolbar {
+  background: #202b3b !important;
+}
+
+.app-theme-chalk .app-fullscreen-toolbar {
+  background: #dce8d7 !important;
+}
+
+.app-theme-dark .blocklyToolboxDiv {
+  background: #1f2937 !important;
+  border-color: #475569 !important;
+}
+
+.app-theme-chalk .blocklyToolboxDiv {
+  background: #dce8d7 !important;
+  border-color: #b7c9b0 !important;
+}
+
+.app-theme-dark .blocklyTreeLabel {
+  color: #e5e7eb !important;
+}
+
+.app-theme-chalk .blocklyTreeLabel {
+  color: #263b2b !important;
+}
+
+.app-theme-dark .blocklyTreeRow:hover {
+  background: #334155 !important;
+}
+
+.app-theme-chalk .blocklyTreeRow:hover {
+  background: #cbdcc5 !important;
+}
+
+.app-theme-dark .blocklyTreeSelected {
+  background: #3b4b62 !important;
+}
+
+.app-theme-chalk .blocklyTreeSelected {
+  background: #bcd1b5 !important;
+}
+
+.app-theme-dark .blocklyFlyoutBackground {
+  fill: #273449 !important;
+}
+
+.app-theme-chalk .blocklyFlyoutBackground {
+  fill: #e3eddf !important;
+}
+
+.app-theme-dark .blocklyMainBackground {
+  fill: #17212c !important;
+}
+
+.app-theme-chalk .blocklyMainBackground {
+  fill: #f4f8f1 !important;
+}

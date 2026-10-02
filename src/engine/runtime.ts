@@ -32,12 +32,20 @@ export interface RuntimeContext {
   askCallback: ((question: string) => Promise<string>) | null;
 }
 
+interface RunningScript {
+  stopped: boolean;
+  stop: () => void;
+  key?: string;
+}
+
 export class RuntimeEngine {
   ctx: RuntimeContext;
   project: ProjectData;
   private animationFrame: number | null = null;
   private lastTime: number = 0;
-  private runningScripts: { stop: () => void }[] = [];
+  private runningScripts: RunningScript[] = [];
+  private heldKeyScripts = new Map<string, RunningScript[]>();
+  private sensingImageCache = new Map<string, Promise<HTMLImageElement | null>>();
 
   constructor(project: ProjectData, onStateChange: () => void) {
     this.project = project;
@@ -70,6 +78,22 @@ export class RuntimeEngine {
     return [...Object.values(this.ctx.sprites), ...this.ctx.clones];
   }
 
+  private moveSpriteTo(sprite: RuntimeSpriteState, x: number, y: number) {
+    const canvas = this.ctx.penCanvas;
+    const penCtx = this.ctx.penCtx;
+    if (sprite.penDown && canvas && penCtx) {
+      penCtx.beginPath();
+      penCtx.moveTo((sprite.x + 240) * canvas.width / 480, (180 - sprite.y) * canvas.height / 360);
+      penCtx.lineTo((x + 240) * canvas.width / 480, (180 - y) * canvas.height / 360);
+      penCtx.strokeStyle = sprite.penColor;
+      penCtx.lineWidth = sprite.penSize;
+      penCtx.lineCap = "round";
+      penCtx.stroke();
+    }
+    sprite.x = x;
+    sprite.y = y;
+  }
+
   async run(workspace: Blockly.Workspace, trigger: { type: string; key?: string; spriteId?: string; message?: string }) {
     this.ctx.running = true;
     this.ctx.stopAll = false;
@@ -85,7 +109,11 @@ export class RuntimeEngine {
       const shouldRun = this.matchTrigger(block, trigger);
       if (shouldRun) {
         const sprite = this.getBlockSprite(block);
-        this.startScript(block, sprite);
+        if (trigger.type === "key" && trigger.key && block.type === "event_when_key") {
+          this.startKeyScript(block, sprite, trigger.key);
+        } else {
+          this.startScript(block, sprite);
+        }
       }
     }
 
@@ -104,7 +132,7 @@ export class RuntimeEngine {
       case "event_when_clicked":
         return trigger.type === "clicked" && trigger.spriteId === this.getBlockSpriteId(block);
       case "event_when_start":
-        return trigger.type === "start";
+        return trigger.type === "start" || trigger.type === "flag";
       case "event_when_receive":
         if (trigger.type !== "receive") return false;
         return block.getFieldValue("MESSAGE") === trigger.message;
@@ -127,26 +155,61 @@ export class RuntimeEngine {
     return this.ctx.sprites[id] ?? null;
   }
 
-  private startScript(block: Blockly.Block, sprite: RuntimeSpriteState | null) {
-    let stopped = false;
-    const scriptObj = { stop: () => { stopped = true; } };
+  private startScript(block: Blockly.Block, sprite: RuntimeSpriteState | null): Promise<void> {
+    const scriptObj: RunningScript = { stopped: false, stop: () => { scriptObj.stopped = true; } };
     this.runningScripts.push(scriptObj);
 
-    (async () => {
+    return (async () => {
       try {
         let current: Blockly.Block | null = block;
         // Skip the event hat block itself
         if (this.isHatBlock(block)) {
           current = block.getNextBlock();
         }
-        while (current && !stopped && !this.ctx.stopAll) {
-          await this.executeBlock(current, sprite);
+        while (current && !scriptObj.stopped && !this.ctx.stopAll) {
+          await this.executeBlock(current, sprite, scriptObj);
           current = current.getNextBlock();
         }
       } catch (e) {
         // Script ended
       }
       this.runningScripts = this.runningScripts.filter((s) => s !== scriptObj);
+    })();
+  }
+
+  private startKeyScript(block: Blockly.Block, sprite: RuntimeSpriteState | null, key: string) {
+    const existing = this.heldKeyScripts.get(key) ?? [];
+    if (existing.some((script) => !script.stopped && (script as RunningScript & { blockId?: string }).blockId === block.id)) return;
+
+    const scriptObj: RunningScript & { blockId: string } = {
+      stopped: false,
+      key,
+      blockId: block.id,
+      stop: () => { scriptObj.stopped = true; },
+    };
+    this.runningScripts.push(scriptObj);
+    this.heldKeyScripts.set(key, [...existing, scriptObj]);
+
+    void (async () => {
+      try {
+        while (!scriptObj.stopped && this.ctx.keysPressed.has(key) && !this.ctx.stopAll) {
+          let current = block.getNextBlock();
+          while (current && !scriptObj.stopped && !this.ctx.stopAll) {
+            await this.executeBlock(current, sprite, scriptObj);
+            current = current.getNextBlock();
+          }
+          if (!scriptObj.stopped && this.ctx.keysPressed.has(key) && !this.ctx.stopAll) {
+            await this.wait(0.1, scriptObj);
+          }
+        }
+      } catch (error) {
+        console.error("Key script error:", error);
+      } finally {
+        this.runningScripts = this.runningScripts.filter((script) => script !== scriptObj);
+        const activeScripts = (this.heldKeyScripts.get(key) ?? []).filter((script) => script !== scriptObj);
+        if (activeScripts.length) this.heldKeyScripts.set(key, activeScripts);
+        else this.heldKeyScripts.delete(key);
+      }
     })();
   }
 
@@ -161,7 +224,7 @@ export class RuntimeEngine {
     ].includes(block.type);
   }
 
-  private async executeBlock(block: Blockly.Block, sprite: RuntimeSpriteState | null): Promise<any> {
+  private async executeBlock(block: Blockly.Block, sprite: RuntimeSpriteState | null, script?: RunningScript): Promise<any> {
     if (this.ctx.stopAll || this.ctx.stopScript) return;
     const type = block.type;
 
@@ -171,8 +234,7 @@ export class RuntimeEngine {
         if (sprite) {
           const steps = this.getNumField(block, "STEPS");
           const rad = ((sprite.direction - 90) * Math.PI) / 180;
-          sprite.x += Math.cos(rad) * steps;
-          sprite.y -= Math.sin(rad) * steps;
+          this.moveSpriteTo(sprite, sprite.x + Math.cos(rad) * steps, sprite.y - Math.sin(rad) * steps);
         }
         break;
       }
@@ -186,8 +248,7 @@ export class RuntimeEngine {
       }
       case "motion_goto_xy": {
         if (sprite) {
-          sprite.x = this.getNumField(block, "X");
-          sprite.y = this.getNumField(block, "Y");
+          this.moveSpriteTo(sprite, this.getNumField(block, "X"), this.getNumField(block, "Y"));
         }
         break;
       }
@@ -200,10 +261,9 @@ export class RuntimeEngine {
           const startY = sprite.y;
           const steps = Math.max(1, Math.floor(secs * 60));
           for (let i = 1; i <= steps; i++) {
-            if (this.ctx.stopAll) return;
+            if (this.ctx.stopAll || script?.stopped) return;
             const t = i / steps;
-            sprite.x = startX + (targetX - startX) * t;
-            sprite.y = startY + (targetY - startY) * t;
+            this.moveSpriteTo(sprite, startX + (targetX - startX) * t, startY + (targetY - startY) * t);
             this.ctx.onStateChange();
             await this.frame();
           }
@@ -211,19 +271,19 @@ export class RuntimeEngine {
         break;
       }
       case "motion_change_x": {
-        if (sprite) sprite.x += this.getNumField(block, "DX");
+        if (sprite) this.moveSpriteTo(sprite, sprite.x + this.getNumField(block, "DX"), sprite.y);
         break;
       }
       case "motion_change_y": {
-        if (sprite) sprite.y += this.getNumField(block, "DY");
+        if (sprite) this.moveSpriteTo(sprite, sprite.x, sprite.y + this.getNumField(block, "DY"));
         break;
       }
       case "motion_set_x": {
-        if (sprite) sprite.x = this.getNumField(block, "X");
+        if (sprite) this.moveSpriteTo(sprite, this.getNumField(block, "X"), sprite.y);
         break;
       }
       case "motion_set_y": {
-        if (sprite) sprite.y = this.getNumField(block, "Y");
+        if (sprite) this.moveSpriteTo(sprite, sprite.x, this.getNumField(block, "Y"));
         break;
       }
       case "motion_point_direction": {
@@ -296,7 +356,7 @@ export class RuntimeEngine {
       // ============ SOUND ============
       case "sound_play":
       case "sound_start": {
-        this.playBeep(440, 0.3);
+        this.playBeep(440, 0.3, sprite?.volume);
         break;
       }
       case "sound_stop_all": {
@@ -304,84 +364,87 @@ export class RuntimeEngine {
         break;
       }
       case "sound_change_volume": {
-        // volume handled per-sprite
+        if (sprite) sprite.volume = Math.max(0, Math.min(100, sprite.volume + this.getNumField(block, "VOLUME")));
         break;
       }
       case "sound_set_volume": {
-        if (sprite) sprite.volume = this.getNumField(block, "VOLUME");
+        if (sprite) sprite.volume = Math.max(0, Math.min(100, this.getNumField(block, "VOLUME")));
         break;
       }
       case "sound_play_note": {
         const note = this.getNumField(block, "NOTE");
         const beats = this.getNumField(block, "BEATS");
         const freq = 440 * Math.pow(2, (note - 69) / 12);
-        this.playBeep(freq, beats * 0.5);
+        this.playBeep(freq, beats * 0.5, sprite?.volume);
         break;
       }
 
       // ============ EVENTS ============
       case "event_broadcast": {
         const msg = this.getField(block, "MESSAGE");
-        this.broadcast(msg, false);
+        await this.broadcast(msg, false, block.workspace, sprite);
         break;
       }
       case "event_broadcast_wait": {
         const msg = this.getField(block, "MESSAGE");
-        this.broadcast(msg, true);
+        await this.broadcast(msg, true, block.workspace, sprite);
         break;
       }
 
       // ============ CONTROL ============
       case "control_wait": {
-        await this.wait(this.getNumField(block, "SECS"));
+        await this.wait(this.getNumField(block, "SECS"), script);
         break;
       }
       case "control_repeat": {
-        const times = await this.evalInput(block, "TIMES", 0) as number;
+        const times = await this.evalInput(block, "TIMES", 0, script) as number;
         const doBlock = block.getInput("DO")?.connection?.targetBlock();
         for (let i = 0; i < times; i++) {
-          if (this.ctx.stopAll) return;
-          await this.runStatementStack(doBlock, sprite);
+          if (this.ctx.stopAll || script?.stopped) return;
+          await this.runStatementStack(doBlock, sprite, script);
         }
         break;
       }
       case "control_forever": {
         const doBlock = block.getInput("DO")?.connection?.targetBlock();
-        while (!this.ctx.stopAll) {
-          await this.runStatementStack(doBlock, sprite);
+        while (!this.ctx.stopAll && !script?.stopped) {
+          await this.runStatementStack(doBlock, sprite, script);
           await this.frame();
         }
         return;
       }
       case "control_if": {
-        const cond = await this.evalInput(block, "CONDITION", false);
+        const cond = await this.evalInput(block, "CONDITION", false, script);
         if (cond) {
           const doBlock = block.getInput("DO")?.connection?.targetBlock();
-          await this.runStatementStack(doBlock, sprite);
+          await this.runStatementStack(doBlock, sprite, script);
         }
         break;
       }
       case "control_if_else": {
-        const cond = await this.evalInput(block, "CONDITION", false);
+        const cond = await this.evalInput(block, "CONDITION", false, script);
         const branch = cond ? "DO" : "ELSE";
         const doBlock = block.getInput(branch)?.connection?.targetBlock();
-        await this.runStatementStack(doBlock, sprite);
+        await this.runStatementStack(doBlock, sprite, script);
         break;
       }
       case "control_repeat_until": {
         const doBlock = block.getInput("DO")?.connection?.targetBlock();
-        let cond = await this.evalInput(block, "CONDITION", false);
-        while (!cond && !this.ctx.stopAll) {
-          await this.runStatementStack(doBlock, sprite);
+        let cond = await this.evalInput(block, "CONDITION", false, script);
+        while (!cond && !this.ctx.stopAll && !script?.stopped) {
+          await this.runStatementStack(doBlock, sprite, script);
           await this.frame();
-          cond = await this.evalInput(block, "CONDITION", false);
+          cond = await this.evalInput(block, "CONDITION", false, script);
         }
         break;
       }
       case "control_stop": {
         const mode = this.getField(block, "STOP");
         if (mode === "all") this.ctx.stopAll = true;
-        else this.ctx.stopScript = true;
+        else if (mode === "this") script?.stop();
+        else this.runningScripts.forEach((running) => {
+          if (running !== script) running.stop();
+        });
         break;
       }
       case "control_create_clone": {
@@ -390,8 +453,9 @@ export class RuntimeEngine {
         if (target) {
           const clone = { ...target, id: generateSpriteId(), isClone: true, parentId: target.id, layerOrder: 1000 + this.ctx.cloneCounter++, saying: null, sayTimer: 0, variables: { ...target.variables } };
           this.ctx.clones.push(clone);
-          // Trigger clone start on the new clone
-          // (handled by caller if needed)
+          for (const hat of block.workspace.getTopBlocks(false)) {
+            if (hat.type === "control_when_start_as_clone") this.startScript(hat, clone);
+          }
         }
         break;
       }
@@ -399,7 +463,7 @@ export class RuntimeEngine {
         if (sprite?.isClone) {
           const idx = this.ctx.clones.findIndex((c) => c.id === sprite.id);
           if (idx >= 0) this.ctx.clones.splice(idx, 1);
-          this.ctx.stopScript = true;
+          script?.stop();
         }
         break;
       }
@@ -423,8 +487,8 @@ export class RuntimeEngine {
         return false;
       }
       case "sensing_touching_color": {
-        // Simplified - returns false (color detection would need pixel sampling)
-        return false;
+        if (!sprite) return false;
+        return this.isTouchingColor(sprite, this.getField(block, "COLOR"));
       }
       case "sensing_touching_edge": {
         if (!sprite) return false;
@@ -563,21 +627,36 @@ export class RuntimeEngine {
         if (defBlock) {
           const fnSprite = sprite;
           let current = defBlock.getNextBlock();
-          while (current && !this.ctx.stopAll) {
-            await this.executeBlock(current, fnSprite);
+          this.ctx.stopScript = false;
+          delete this.ctx.functions.__return;
+          while (current && !this.ctx.stopAll && !this.ctx.stopScript && !script?.stopped) {
+            await this.executeBlock(current, fnSprite, script);
             current = current.getNextBlock();
           }
+          if (this.ctx.functions.__return !== undefined) {
+            this.ctx.functions[name] = this.ctx.functions.__return;
+            delete this.ctx.functions.__return;
+          }
+          this.ctx.stopScript = false;
         }
+        break;
+      }
+      case "procedures_return": {
+        this.ctx.functions.__return = this.getField(block, "VALUE");
+        this.ctx.stopScript = true;
         break;
       }
 
       // ============ DRAWING ============
       case "drawing_pen_down": if (sprite) sprite.penDown = true; break;
       case "drawing_pen_up": if (sprite) sprite.penDown = false; break;
-      case "drawing_set_color": if (sprite) sprite.penColor = this.getField(block, "COLOR"); break;
+      case "drawing_set_color": if (sprite) {
+        const color = this.getField(block, "COLOR");
+        sprite.penColor = color.startsWith("#") ? color : `#${color}`;
+      } break;
       case "drawing_set_size": if (sprite) sprite.penSize = this.getNumField(block, "SIZE"); break;
       case "drawing_clear": this.clearPen(); break;
-      case "drawing_stamp": if (sprite) this.stamp(sprite); break;
+      case "drawing_stamp": if (sprite) await this.stamp(sprite); break;
 
       // ============ GAME ============
       case "game_set_score": if (sprite) sprite.score = this.getNumField(block, "SCORE"); break;
@@ -589,13 +668,13 @@ export class RuntimeEngine {
       case "game_change_lives": if (sprite) sprite.lives += this.getNumField(block, "VALUE"); break;
       case "game_set_gravity": if (sprite) sprite.gravity = this.getNumField(block, "GRAVITY"); break;
       case "game_jump": {
-        if (sprite) sprite.vy = -this.getNumField(block, "POWER");
+        if (sprite) sprite.vy = this.getNumField(block, "POWER");
         break;
       }
       case "game_apply_gravity": {
         if (sprite) {
-          sprite.vy += sprite.gravity;
-          sprite.y += sprite.vy;
+          sprite.vy -= sprite.gravity;
+          this.moveSpriteTo(sprite, sprite.x, sprite.y + sprite.vy);
         }
         break;
       }
@@ -606,10 +685,10 @@ export class RuntimeEngine {
           const dir = this.getField(block, "DIR");
           const speed = this.getNumField(block, "SPEED");
           switch (dir) {
-            case "left": sprite.x -= speed; break;
-            case "right": sprite.x += speed; break;
-            case "up": sprite.y += speed; break;
-            case "down": sprite.y -= speed; break;
+            case "left": this.moveSpriteTo(sprite, sprite.x - speed, sprite.y); break;
+            case "right": this.moveSpriteTo(sprite, sprite.x + speed, sprite.y); break;
+            case "up": this.moveSpriteTo(sprite, sprite.x, sprite.y + speed); break;
+            case "down": this.moveSpriteTo(sprite, sprite.x, sprite.y - speed); break;
           }
         }
         break;
@@ -618,8 +697,7 @@ export class RuntimeEngine {
         if (sprite) {
           const speed = this.getNumField(block, "SPEED");
           const angle = Math.random() * Math.PI * 2;
-          sprite.x += Math.cos(angle) * speed;
-          sprite.y += Math.sin(angle) * speed;
+          this.moveSpriteTo(sprite, sprite.x + Math.cos(angle) * speed, sprite.y + Math.sin(angle) * speed);
         }
         break;
       }
@@ -662,10 +740,10 @@ export class RuntimeEngine {
         return mathFuncs[func]?.(num) ?? 0;
       }
       case "advanced_wait_until": {
-        let cond = await this.evalInput(block, "CONDITION", false);
-        while (!cond && !this.ctx.stopAll) {
+        let cond = await this.evalInput(block, "CONDITION", false, script);
+        while (!cond && !this.ctx.stopAll && !script?.stopped) {
           await this.frame();
-          cond = await this.evalInput(block, "CONDITION", false);
+          cond = await this.evalInput(block, "CONDITION", false, script);
         }
         break;
       }
@@ -680,21 +758,21 @@ export class RuntimeEngine {
     return allBlocks.find((b) => b.type === "procedures_def" && b.getFieldValue("NAME") === name) ?? null;
   }
 
-  private async runStatementStack(block: Blockly.Block | null | undefined, sprite: RuntimeSpriteState | null) {
+  private async runStatementStack(block: Blockly.Block | null | undefined, sprite: RuntimeSpriteState | null, script?: RunningScript) {
     let current = block;
-    while (current && !this.ctx.stopAll && !this.ctx.stopScript) {
-      await this.executeBlock(current, sprite);
+    while (current && !this.ctx.stopAll && !this.ctx.stopScript && !script?.stopped) {
+      await this.executeBlock(current, sprite, script);
       current = current.getNextBlock();
     }
     this.ctx.stopScript = false;
   }
 
-  private async evalInput(block: Blockly.Block, inputName: string, defaultValue: any): Promise<any> {
+  private async evalInput(block: Blockly.Block, inputName: string, defaultValue: any, script?: RunningScript): Promise<any> {
     const inputBlock = block.getInput(inputName)?.connection?.targetBlock();
     if (inputBlock) {
       const spriteId = block.getCommentText?.() ?? "";
       const inputSprite = this.ctx.sprites[spriteId] ?? null;
-      return await this.executeBlock(inputBlock, inputSprite);
+      return await this.executeBlock(inputBlock, inputSprite, script);
     }
     return defaultValue;
   }
@@ -727,13 +805,85 @@ export class RuntimeEngine {
     return Math.sqrt(dx * dx + dy * dy) < (aRad + bRad) * 0.7;
   }
 
-  private broadcast(message: string, wait: boolean) {
-    // Trigger all matching event_when_receive blocks
-    // For now, we just queue it
-    this.ctx.broadcastHandlers.get(message)?.forEach((h) => h());
+  private async isTouchingColor(sprite: RuntimeSpriteState, color: string): Promise<boolean> {
+    if (!sprite.visible) return false;
+    let hex = color.trim().replace(/^#/, "");
+    if (hex.length === 3) hex = hex.split("").map((digit) => digit + digit).join("");
+    if (!/^[0-9a-f]{6}$/i.test(hex)) return false;
+    const target = [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+    const createCanvas = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 480;
+      canvas.height = 360;
+      return canvas;
+    };
+    const loadImage = (dataUrl: string): Promise<HTMLImageElement | null> => {
+      const cached = this.sensingImageCache.get(dataUrl);
+      if (cached) return cached;
+      const imagePromise = new Promise<HTMLImageElement | null>((resolve) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => resolve(null);
+        image.src = dataUrl;
+      });
+      this.sensingImageCache.set(dataUrl, imagePromise);
+      return imagePromise;
+    };
+    const drawSprite = async (context: CanvasRenderingContext2D, targetSprite: RuntimeSpriteState) => {
+      const costume = targetSprite.costumes[targetSprite.costumeIndex];
+      if (!costume) return;
+      const image = await loadImage(costume.dataUrl);
+      if (!image) return;
+      const width = (costume.width || image.naturalWidth) * targetSprite.size / 100;
+      const height = (costume.height || image.naturalHeight) * targetSprite.size / 100;
+      context.save();
+      context.translate(targetSprite.x + 240, 180 - targetSprite.y);
+      if (targetSprite.rotationStyle === "all-around") {
+        context.rotate(((targetSprite.direction - 90) * Math.PI) / 180);
+      } else if (targetSprite.rotationStyle === "left-right" && targetSprite.direction < 0) {
+        context.scale(-1, 1);
+      }
+      context.globalAlpha = Math.max(0, 1 - targetSprite.effects.ghost / 100);
+      context.filter = targetSprite.effects.color ? `hue-rotate(${targetSprite.effects.color * 3.6}deg)` : "none";
+      context.drawImage(image, -width / 2, -height / 2, width, height);
+      context.restore();
+    };
+
+    const sceneCanvas = createCanvas();
+    const sceneContext = sceneCanvas.getContext("2d");
+    const maskCanvas = createCanvas();
+    const maskContext = maskCanvas.getContext("2d");
+    if (!sceneContext || !maskContext) return false;
+
+    const backdrop = this.project.backdrops[this.ctx.backdrop] ?? this.project.backdrops[this.project.currentBackdrop];
+    if (backdrop) {
+      const backdropImage = await loadImage(backdrop.dataUrl);
+      if (backdropImage) sceneContext.drawImage(backdropImage, 0, 0, 480, 360);
+    }
+    for (const otherSprite of this.getAllSprites()) {
+      if (otherSprite.id !== sprite.id && otherSprite.visible) await drawSprite(sceneContext, otherSprite);
+    }
+    await drawSprite(maskContext, sprite);
+
+    const scenePixels = sceneContext.getImageData(0, 0, 480, 360).data;
+    const spritePixels = maskContext.getImageData(0, 0, 480, 360).data;
+    for (let index = 0; index < scenePixels.length; index += 4) {
+      if (spritePixels[index + 3] === 0 || scenePixels[index + 3] === 0) continue;
+      if (Math.abs(scenePixels[index] - target[0]) <= 20 &&
+          Math.abs(scenePixels[index + 1] - target[1]) <= 20 &&
+          Math.abs(scenePixels[index + 2] - target[2]) <= 20) return true;
+    }
+    return false;
   }
 
-  private playBeep(freq: number, duration: number) {
+  private async broadcast(message: string, wait: boolean, workspace: Blockly.Workspace, sender: RuntimeSpriteState | null) {
+    const executions = workspace.getTopBlocks(false)
+      .filter((block) => block.type === "event_when_receive" && this.getField(block, "MESSAGE") === message)
+      .map((block) => this.startScript(block, this.getBlockSprite(block) ?? sender));
+    if (wait) await Promise.all(executions);
+  }
+
+  private playBeep(freq: number, duration: number, volume = 100) {
     if (!this.ctx.audioCtx) {
       this.ctx.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
@@ -744,14 +894,27 @@ export class RuntimeEngine {
     gain.connect(ctx.destination);
     osc.frequency.value = freq;
     osc.type = "sine";
-    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    gain.gain.setValueAtTime(Math.max(0.0001, 0.15 * Math.max(0, Math.min(100, volume)) / 100), ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + Math.max(0.01, duration));
     osc.start();
-    osc.stop(ctx.currentTime + duration);
+    osc.stop(ctx.currentTime + Math.max(0.01, duration));
+    const activeSound = { osc };
+    this.ctx.activeSounds.push(activeSound);
+    osc.onended = () => {
+      this.ctx.activeSounds = this.ctx.activeSounds.filter((sound) => sound !== activeSound);
+    };
   }
 
   private stopAllSounds() {
-    // Audio context sounds are short-lived and stop on their own
+    for (const sound of this.ctx.activeSounds) {
+      try {
+        sound.osc?.stop();
+        sound.buffer?.stop();
+      } catch {
+        // A sound may already have ended.
+      }
+    }
+    this.ctx.activeSounds = [];
   }
 
   private clearPen() {
@@ -760,21 +923,39 @@ export class RuntimeEngine {
     }
   }
 
-  private stamp(sprite: RuntimeSpriteState) {
-    // Simplified stamp - draws a circle at sprite position
-    if (!this.ctx.penCtx) return;
+  private async stamp(sprite: RuntimeSpriteState) {
     const ctx = this.ctx.penCtx;
-    ctx.fillStyle = sprite.penColor;
-    ctx.beginPath();
-    ctx.arc(sprite.x + 240, 180 - sprite.y, 20 * (sprite.size / 100), 0, Math.PI * 2);
-    ctx.fill();
+    const canvas = this.ctx.penCanvas;
+    const costume = sprite.costumes[sprite.costumeIndex];
+    if (!ctx || !canvas || !costume) return;
+    const imagePromise = this.sensingImageCache.get(costume.dataUrl) ?? new Promise<HTMLImageElement | null>((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => resolve(null);
+      image.src = costume.dataUrl;
+    });
+    this.sensingImageCache.set(costume.dataUrl, imagePromise);
+    const image = await imagePromise;
+    if (!image) return;
+
+    const width = (costume.width || image.naturalWidth) * sprite.size / 100;
+    const height = (costume.height || image.naturalHeight) * sprite.size / 100;
+    ctx.save();
+    ctx.translate((sprite.x + 240) * canvas.width / 480, (180 - sprite.y) * canvas.height / 360);
+    if (sprite.rotationStyle === "all-around") {
+      ctx.rotate(((sprite.direction - 90) * Math.PI) / 180);
+    } else if (sprite.rotationStyle === "left-right" && sprite.direction < 0) {
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(image, -width / 2, -height / 2, width, height);
+    ctx.restore();
   }
 
-  private async wait(seconds: number) {
+  private async wait(seconds: number, script?: RunningScript) {
     const ms = seconds * 1000;
     const start = Date.now();
     while (Date.now() - start < ms) {
-      if (this.ctx.stopAll) return;
+      if (this.ctx.stopAll || script?.stopped) return;
       await this.frame();
     }
   }
@@ -808,6 +989,7 @@ export class RuntimeEngine {
     }
     this.runningScripts.forEach((s) => s.stop());
     this.runningScripts = [];
+    this.heldKeyScripts.clear();
     this.stopAllSounds();
     if (this.ctx.audioCtx) {
       this.ctx.audioCtx.close();
@@ -815,12 +997,26 @@ export class RuntimeEngine {
     }
   }
 
-  handleKeyDown(key: string) {
+  handleKeyDown(key: string, workspace?: Blockly.Workspace | null) {
+    if (this.ctx.keysPressed.has(key)) return;
     this.ctx.keysPressed.add(key);
+    if (!workspace || !this.ctx.running || this.ctx.stopAll) return;
+    for (const block of workspace.getTopBlocks(false)) {
+      if (block.type !== "event_when_key") continue;
+      const blockKey = String(block.getFieldValue("KEY") ?? "");
+      if (blockKey === key || blockKey === "any") {
+        this.startKeyScript(block, this.getBlockSprite(block), key);
+      }
+    }
   }
 
   handleKeyUp(key: string) {
     this.ctx.keysPressed.delete(key);
+    for (const script of this.heldKeyScripts.get(key) ?? []) script.stop();
+  }
+
+  clearPressedKeys() {
+    for (const key of this.ctx.keysPressed) this.handleKeyUp(key);
   }
 
   handleMouseMove(x: number, y: number) {
