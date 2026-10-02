@@ -103,6 +103,7 @@
 
 .app-theme-default {
   --theme-app-bg: #f9fafb;
+  --theme-stage-frame: #1f2937;
   --theme-text: #111827;
   color: var(--theme-text);
   background: var(--theme-app-bg);
@@ -111,6 +112,7 @@
 
 .app-theme-dark {
   --theme-app-bg: #111827;
+  --theme-stage-frame: #0b1220;
   --theme-surface: #1f2937;
   --theme-surface-alt: #273449;
   --theme-border: #475569;
@@ -124,6 +126,7 @@
 
 .app-theme-chalk {
   --theme-app-bg: #e7efe3;
+  --theme-stage-frame: #cadbc4;
   --theme-surface: #f4f8f1;
   --theme-surface-alt: #dce8d7;
   --theme-border: #b7c9b0;
@@ -133,6 +136,10 @@
   color: var(--theme-text);
   background: var(--theme-app-bg);
   color-scheme: light;
+}
+
+.stage-canvas-shell {
+  background-color: var(--theme-stage-frame, #1f2937);
 }
 
 .app-theme-dark [class*="bg-white"],

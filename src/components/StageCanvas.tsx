@@ -252,7 +252,7 @@ export default function StageCanvas({
   };
 
   return (
-    <div className={`relative bg-gray-900 rounded-lg overflow-hidden ${fullscreen ? "fixed inset-0 z-50" : ""}`}>
+    <div className={`stage-canvas-shell relative rounded-lg overflow-hidden ${fullscreen ? "fixed inset-0 z-50" : ""}`}>
       <canvas
         ref={canvasRef}
         width={stageSize.width}
