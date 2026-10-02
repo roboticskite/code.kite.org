@@ -1,0 +1,95 @@
+import type { Lesson } from "../types";
+
+export const LESSONS: Lesson[] = [
+  {
+    id: 1,
+    title: "Move a Character",
+    description: "Learn how to make your character move on the stage using motion blocks.",
+    steps: [
+      { instruction: "Drag a 'when green flag clicked' block from the Events category", completed: false },
+      { instruction: "Attach a 'move 10 steps' block from Motion", completed: false },
+      { instruction: "Click the green flag to see your character move", completed: false },
+    ],
+    challenge: "Make the cat move 20 steps when the green flag is clicked!",
+    hintBlocks: ["event_when_flag", "motion_move_steps"],
+  },
+  {
+    id: 2,
+    title: "Events",
+    description: "Learn how to make things happen when keys are pressed or sprites are clicked.",
+    steps: [
+      { instruction: "Drag a 'when space key pressed' block from Events", completed: false },
+      { instruction: "Attach a 'say Hello!' block from Looks", completed: false },
+      { instruction: "Press the space key on your keyboard", completed: false },
+    ],
+    challenge: "Make the sprite say something when you press the space key!",
+    hintBlocks: ["event_when_key", "looks_say"],
+  },
+  {
+    id: 3,
+    title: "Loops",
+    description: "Learn how to repeat actions using forever and repeat blocks.",
+    steps: [
+      { instruction: "Add a 'when green flag clicked' event", completed: false },
+      { instruction: "Attach a 'forever' block from Control", completed: false },
+      { instruction: "Inside forever, put 'move 10 steps' and 'turn clockwise 15 degrees'", completed: false },
+      { instruction: "Run it and watch the sprite spin in circles", completed: false },
+    ],
+    challenge: "Make the sprite move in a circle forever!",
+    hintBlocks: ["event_when_flag", "control_forever", "motion_move_steps", "motion_turn_clockwise"],
+  },
+  {
+    id: 4,
+    title: "Conditions",
+    description: "Learn how to make decisions using if blocks.",
+    steps: [
+      { instruction: "Add a 'when green flag clicked' event", completed: false },
+      { instruction: "Attach a 'forever' block", completed: false },
+      { instruction: "Inside forever, add an 'if' block", completed: false },
+      { instruction: "Use 'key space pressed?' as the condition", completed: false },
+      { instruction: "Inside the if, put 'say Jump!'", completed: false },
+    ],
+    challenge: "Make the sprite say something only when a key is pressed!",
+    hintBlocks: ["event_when_flag", "control_forever", "control_if", "sensing_key_pressed", "looks_say"],
+  },
+  {
+    id: 5,
+    title: "Variables",
+    description: "Learn how to store and change values using variables.",
+    steps: [
+      { instruction: "Create a variable called 'score' from the Variables category", completed: false },
+      { instruction: "Add 'when green flag clicked' and 'set score to 0'", completed: false },
+      { instruction: "Add 'forever' with 'if touching Sprite2' inside", completed: false },
+      { instruction: "Inside the if, add 'change score by 1'", completed: false },
+    ],
+    challenge: "Create a score variable that increases when two sprites touch!",
+    hintBlocks: ["event_when_flag", "variables_set", "control_forever", "control_if", "sensing_touching", "variables_change"],
+  },
+  {
+    id: 6,
+    title: "Animations",
+    description: "Learn how to animate sprites using costumes and looks blocks.",
+    steps: [
+      { instruction: "Add a 'when green flag clicked' event", completed: false },
+      { instruction: "Attach a 'forever' block", completed: false },
+      { instruction: "Inside forever, add 'next costume' and 'wait 0.2 seconds'", completed: false },
+      { instruction: "Run it to see the sprite animate", completed: false },
+    ],
+    challenge: "Animate the sprite by switching costumes in a loop!",
+    hintBlocks: ["event_when_flag", "control_forever", "looks_next_costume", "control_wait"],
+  },
+  {
+    id: 7,
+    title: "Build Your First Game",
+    description: "Combine everything you've learned to build a simple game!",
+    steps: [
+      { instruction: "Create a variable called 'score'", completed: false },
+      { instruction: "Make the player sprite move with arrow keys", completed: false },
+      { instruction: "Add an enemy sprite that moves randomly", completed: false },
+      { instruction: "When the player touches the enemy, change the score", completed: false },
+      { instruction: "Run your game and play it!", completed: false },
+    ],
+    challenge: "Build a game where you move a character to catch objects and score points!",
+    hintBlocks: ["event_when_key", "motion_change_x", "sensing_touching", "variables_change", "control_forever"],
+  },
+];

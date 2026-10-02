@@ -1,0 +1,838 @@
+import * as Blockly from "blockly";
+import type { RuntimeSpriteState, ProjectData } from "../types";
+import { initializeRuntimeState, createRuntimeSprite } from "./spriteState";
+import { generateSpriteId } from "../utils/helpers";
+
+export interface RuntimeContext {
+  sprites: Record<string, RuntimeSpriteState>;
+  clones: RuntimeSpriteState[];
+  variables: Record<string, any>;
+  lists: Record<string, any[]>;
+  functions: Record<string, any>;
+  backdrop: number;
+  timer: number;
+  answer: string;
+  running: boolean;
+  keysPressed: Set<string>;
+  mouseX: number;
+  mouseY: number;
+  mouseDown: boolean;
+  gameOver: boolean;
+  levelComplete: boolean;
+  penCanvas: HTMLCanvasElement | null;
+  penCtx: CanvasRenderingContext2D | null;
+  audioCtx: AudioContext | null;
+  activeSounds: { osc?: OscillatorNode; buffer?: AudioBufferSourceNode }[];
+  broadcastHandlers: Map<string, (() => void)[]>;
+  stopAll: boolean;
+  stopScript: boolean;
+  startTime: number;
+  cloneCounter: number;
+  onStateChange: () => void;
+  askCallback: ((question: string) => Promise<string>) | null;
+}
+
+export class RuntimeEngine {
+  ctx: RuntimeContext;
+  project: ProjectData;
+  private animationFrame: number | null = null;
+  private lastTime: number = 0;
+  private runningScripts: { stop: () => void }[] = [];
+
+  constructor(project: ProjectData, onStateChange: () => void) {
+    this.project = project;
+    const state = initializeRuntimeState(project);
+    this.ctx = {
+      ...state,
+      penCanvas: null,
+      penCtx: null,
+      audioCtx: null,
+      activeSounds: [],
+      broadcastHandlers: new Map(),
+      stopAll: false,
+      stopScript: false,
+      cloneCounter: 0,
+      onStateChange,
+      askCallback: null,
+    };
+  }
+
+  setPenCanvas(canvas: HTMLCanvasElement) {
+    this.ctx.penCanvas = canvas;
+    this.ctx.penCtx = canvas.getContext("2d");
+  }
+
+  setAskCallback(cb: (question: string) => Promise<string>) {
+    this.ctx.askCallback = cb;
+  }
+
+  private getAllSprites(): RuntimeSpriteState[] {
+    return [...Object.values(this.ctx.sprites), ...this.ctx.clones];
+  }
+
+  async run(workspace: Blockly.Workspace, trigger: { type: string; key?: string; spriteId?: string; message?: string }) {
+    this.ctx.running = true;
+    this.ctx.stopAll = false;
+    this.ctx.gameOver = false;
+    this.ctx.levelComplete = false;
+    this.ctx.startTime = Date.now();
+    this.ctx.timer = 0;
+
+    const topBlocks = workspace.getTopBlocks();
+
+    for (const block of topBlocks) {
+      if (this.ctx.stopAll) break;
+      const shouldRun = this.matchTrigger(block, trigger);
+      if (shouldRun) {
+        const sprite = this.getBlockSprite(block);
+        this.startScript(block, sprite);
+      }
+    }
+
+    this.startGameLoop();
+  }
+
+  private matchTrigger(block: Blockly.Block, trigger: { type: string; key?: string; spriteId?: string; message?: string }): boolean {
+    switch (block.type) {
+      case "event_when_flag":
+        return trigger.type === "flag";
+      case "event_when_key":
+        if (trigger.type !== "key") return false;
+        const keyField = block.getFieldValue("KEY");
+        if (keyField === "any") return true;
+        return keyField === trigger.key;
+      case "event_when_clicked":
+        return trigger.type === "clicked" && trigger.spriteId === this.getBlockSpriteId(block);
+      case "event_when_start":
+        return trigger.type === "start";
+      case "event_when_receive":
+        if (trigger.type !== "receive") return false;
+        return block.getFieldValue("MESSAGE") === trigger.message;
+      case "control_when_start_as_clone":
+        return trigger.type === "clone";
+      case "procedures_def":
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  private getBlockSpriteId(block: Blockly.Block): string {
+    const target = block.getCommentText?.() ?? "";
+    return target || (this.project.sprites[0]?.id ?? "");
+  }
+
+  private getBlockSprite(block: Blockly.Block): RuntimeSpriteState | null {
+    const id = this.getBlockSpriteId(block);
+    return this.ctx.sprites[id] ?? null;
+  }
+
+  private startScript(block: Blockly.Block, sprite: RuntimeSpriteState | null) {
+    let stopped = false;
+    const scriptObj = { stop: () => { stopped = true; } };
+    this.runningScripts.push(scriptObj);
+
+    (async () => {
+      try {
+        let current: Blockly.Block | null = block;
+        // Skip the event hat block itself
+        if (this.isHatBlock(block)) {
+          current = block.getNextBlock();
+        }
+        while (current && !stopped && !this.ctx.stopAll) {
+          await this.executeBlock(current, sprite);
+          current = current.getNextBlock();
+        }
+      } catch (e) {
+        // Script ended
+      }
+      this.runningScripts = this.runningScripts.filter((s) => s !== scriptObj);
+    })();
+  }
+
+  private isHatBlock(block: Blockly.Block): boolean {
+    return [
+      "event_when_flag",
+      "event_when_key",
+      "event_when_clicked",
+      "event_when_start",
+      "event_when_receive",
+      "control_when_start_as_clone",
+    ].includes(block.type);
+  }
+
+  private async executeBlock(block: Blockly.Block, sprite: RuntimeSpriteState | null): Promise<any> {
+    if (this.ctx.stopAll || this.ctx.stopScript) return;
+    const type = block.type;
+
+    switch (type) {
+      // ============ MOTION ============
+      case "motion_move_steps": {
+        if (sprite) {
+          const steps = this.getNumField(block, "STEPS");
+          const rad = ((sprite.direction - 90) * Math.PI) / 180;
+          sprite.x += Math.cos(rad) * steps;
+          sprite.y -= Math.sin(rad) * steps;
+        }
+        break;
+      }
+      case "motion_turn_clockwise": {
+        if (sprite) sprite.direction += this.getNumField(block, "DEGREES");
+        break;
+      }
+      case "motion_turn_counter": {
+        if (sprite) sprite.direction -= this.getNumField(block, "DEGREES");
+        break;
+      }
+      case "motion_goto_xy": {
+        if (sprite) {
+          sprite.x = this.getNumField(block, "X");
+          sprite.y = this.getNumField(block, "Y");
+        }
+        break;
+      }
+      case "motion_glide_xy": {
+        if (sprite) {
+          const targetX = this.getNumField(block, "X");
+          const targetY = this.getNumField(block, "Y");
+          const secs = this.getNumField(block, "SECS");
+          const startX = sprite.x;
+          const startY = sprite.y;
+          const steps = Math.max(1, Math.floor(secs * 60));
+          for (let i = 1; i <= steps; i++) {
+            if (this.ctx.stopAll) return;
+            const t = i / steps;
+            sprite.x = startX + (targetX - startX) * t;
+            sprite.y = startY + (targetY - startY) * t;
+            this.ctx.onStateChange();
+            await this.frame();
+          }
+        }
+        break;
+      }
+      case "motion_change_x": {
+        if (sprite) sprite.x += this.getNumField(block, "DX");
+        break;
+      }
+      case "motion_change_y": {
+        if (sprite) sprite.y += this.getNumField(block, "DY");
+        break;
+      }
+      case "motion_set_x": {
+        if (sprite) sprite.x = this.getNumField(block, "X");
+        break;
+      }
+      case "motion_set_y": {
+        if (sprite) sprite.y = this.getNumField(block, "Y");
+        break;
+      }
+      case "motion_point_direction": {
+        if (sprite) sprite.direction = this.getNumField(block, "DIR");
+        break;
+      }
+      case "motion_x": return sprite?.x ?? 0;
+      case "motion_y": return sprite?.y ?? 0;
+      case "motion_direction": return sprite?.direction ?? 90;
+
+      // ============ LOOKS ============
+      case "looks_say": {
+        if (sprite) {
+          sprite.saying = this.getField(block, "TEXT");
+          this.ctx.onStateChange();
+        }
+        break;
+      }
+      case "looks_say_for": {
+        if (sprite) {
+          sprite.saying = this.getField(block, "TEXT");
+          this.ctx.onStateChange();
+          const secs = this.getNumField(block, "SECS");
+          await this.wait(secs);
+          sprite.saying = null;
+          this.ctx.onStateChange();
+        }
+        break;
+      }
+      case "looks_show": {
+        if (sprite) sprite.visible = true;
+        break;
+      }
+      case "looks_hide": {
+        if (sprite) sprite.visible = false;
+        break;
+      }
+      case "looks_change_size": {
+        if (sprite) sprite.size += this.getNumField(block, "SIZE");
+        break;
+      }
+      case "looks_set_size": {
+        if (sprite) sprite.size = this.getNumField(block, "SIZE");
+        break;
+      }
+      case "looks_next_costume": {
+        if (sprite) {
+          sprite.costumeIndex = (sprite.costumeIndex + 1) % sprite.costumes.length;
+        }
+        break;
+      }
+      case "looks_change_costume": {
+        if (sprite) {
+          const name = this.getField(block, "COSTUME");
+          const idx = sprite.costumes.findIndex((c) => c.name === name);
+          if (idx >= 0) sprite.costumeIndex = idx;
+        }
+        break;
+      }
+      case "looks_change_color": {
+        if (sprite) sprite.effects.color += this.getNumField(block, "EFFECT");
+        break;
+      }
+      case "looks_switch_backdrop": {
+        this.ctx.backdrop = Math.min(this.ctx.backdrop + 1, Math.max(0, this.project.backdrops.length - 1));
+        break;
+      }
+      case "looks_size": return sprite?.size ?? 100;
+
+      // ============ SOUND ============
+      case "sound_play":
+      case "sound_start": {
+        this.playBeep(440, 0.3);
+        break;
+      }
+      case "sound_stop_all": {
+        this.stopAllSounds();
+        break;
+      }
+      case "sound_change_volume": {
+        // volume handled per-sprite
+        break;
+      }
+      case "sound_set_volume": {
+        if (sprite) sprite.volume = this.getNumField(block, "VOLUME");
+        break;
+      }
+      case "sound_play_note": {
+        const note = this.getNumField(block, "NOTE");
+        const beats = this.getNumField(block, "BEATS");
+        const freq = 440 * Math.pow(2, (note - 69) / 12);
+        this.playBeep(freq, beats * 0.5);
+        break;
+      }
+
+      // ============ EVENTS ============
+      case "event_broadcast": {
+        const msg = this.getField(block, "MESSAGE");
+        this.broadcast(msg, false);
+        break;
+      }
+      case "event_broadcast_wait": {
+        const msg = this.getField(block, "MESSAGE");
+        this.broadcast(msg, true);
+        break;
+      }
+
+      // ============ CONTROL ============
+      case "control_wait": {
+        await this.wait(this.getNumField(block, "SECS"));
+        break;
+      }
+      case "control_repeat": {
+        const times = await this.evalInput(block, "TIMES", 0) as number;
+        const doBlock = block.getInput("DO")?.connection?.targetBlock();
+        for (let i = 0; i < times; i++) {
+          if (this.ctx.stopAll) return;
+          await this.runStatementStack(doBlock, sprite);
+        }
+        break;
+      }
+      case "control_forever": {
+        const doBlock = block.getInput("DO")?.connection?.targetBlock();
+        while (!this.ctx.stopAll) {
+          await this.runStatementStack(doBlock, sprite);
+          await this.frame();
+        }
+        return;
+      }
+      case "control_if": {
+        const cond = await this.evalInput(block, "CONDITION", false);
+        if (cond) {
+          const doBlock = block.getInput("DO")?.connection?.targetBlock();
+          await this.runStatementStack(doBlock, sprite);
+        }
+        break;
+      }
+      case "control_if_else": {
+        const cond = await this.evalInput(block, "CONDITION", false);
+        const branch = cond ? "DO" : "ELSE";
+        const doBlock = block.getInput(branch)?.connection?.targetBlock();
+        await this.runStatementStack(doBlock, sprite);
+        break;
+      }
+      case "control_repeat_until": {
+        const doBlock = block.getInput("DO")?.connection?.targetBlock();
+        let cond = await this.evalInput(block, "CONDITION", false);
+        while (!cond && !this.ctx.stopAll) {
+          await this.runStatementStack(doBlock, sprite);
+          await this.frame();
+          cond = await this.evalInput(block, "CONDITION", false);
+        }
+        break;
+      }
+      case "control_stop": {
+        const mode = this.getField(block, "STOP");
+        if (mode === "all") this.ctx.stopAll = true;
+        else this.ctx.stopScript = true;
+        break;
+      }
+      case "control_create_clone": {
+        const targetName = this.getField(block, "SPRITE");
+        const target = targetName === "myself" ? sprite : Object.values(this.ctx.sprites).find((s) => s.name === targetName);
+        if (target) {
+          const clone = { ...target, id: generateSpriteId(), isClone: true, parentId: target.id, layerOrder: 1000 + this.ctx.cloneCounter++, saying: null, sayTimer: 0, variables: { ...target.variables } };
+          this.ctx.clones.push(clone);
+          // Trigger clone start on the new clone
+          // (handled by caller if needed)
+        }
+        break;
+      }
+      case "control_delete_clone": {
+        if (sprite?.isClone) {
+          const idx = this.ctx.clones.findIndex((c) => c.id === sprite.id);
+          if (idx >= 0) this.ctx.clones.splice(idx, 1);
+          this.ctx.stopScript = true;
+        }
+        break;
+      }
+
+      // ============ SENSING ============
+      case "sensing_key_pressed": {
+        const key = this.getField(block, "KEY");
+        if (key === "any") return this.ctx.keysPressed.size > 0;
+        return this.ctx.keysPressed.has(key);
+      }
+      case "sensing_mouse_down": return this.ctx.mouseDown;
+      case "sensing_mouse_x": return this.ctx.mouseX;
+      case "sensing_mouse_y": return this.ctx.mouseY;
+      case "sensing_touching": {
+        if (!sprite) return false;
+        const targetName = this.getField(block, "SPRITE");
+        const targets = this.getAllSprites().filter((s) => s.id !== sprite.id && s.name === targetName && s.visible);
+        for (const t of targets) {
+          if (this.checkCollision(sprite, t)) return true;
+        }
+        return false;
+      }
+      case "sensing_touching_color": {
+        // Simplified - returns false (color detection would need pixel sampling)
+        return false;
+      }
+      case "sensing_touching_edge": {
+        if (!sprite) return false;
+        const costume = sprite.costumes[sprite.costumeIndex];
+        const halfW = ((costume?.width ?? 80) * sprite.size / 100) / 2;
+        const halfH = ((costume?.height ?? 80) * sprite.size / 100) / 2;
+        const STAGE_W = 240;
+        const STAGE_H = 180;
+        return sprite.x - halfW <= -STAGE_W || sprite.x + halfW >= STAGE_W ||
+               sprite.y - halfH <= -STAGE_H || sprite.y + halfH >= STAGE_H;
+      }
+      case "sensing_touching_mouse": {
+        if (!sprite) return false;
+        const costume = sprite.costumes[sprite.costumeIndex];
+        const halfW = ((costume?.width ?? 80) * sprite.size / 100) / 2;
+        const halfH = ((costume?.height ?? 80) * sprite.size / 100) / 2;
+        const dx = Math.abs(sprite.x - this.ctx.mouseX);
+        const dy = Math.abs(sprite.y - this.ctx.mouseY);
+        return dx < halfW && dy < halfH;
+      }
+      case "sensing_bounce_off_edge": {
+        if (sprite) {
+          const costume = sprite.costumes[sprite.costumeIndex];
+          const halfW = ((costume?.width ?? 80) * sprite.size / 100) / 2;
+          const halfH = ((costume?.height ?? 80) * sprite.size / 100) / 2;
+          const STAGE_W = 240;
+          const STAGE_H = 180;
+          if (sprite.x + halfW >= STAGE_W) {
+            sprite.x = STAGE_W - halfW;
+            sprite.direction = 180 - sprite.direction;
+          } else if (sprite.x - halfW <= -STAGE_W) {
+            sprite.x = -STAGE_W + halfW;
+            sprite.direction = 180 - sprite.direction;
+          }
+          if (sprite.y + halfH >= STAGE_H) {
+            sprite.y = STAGE_H - halfH;
+            sprite.direction = -sprite.direction;
+          } else if (sprite.y - halfH <= -STAGE_H) {
+            sprite.y = -STAGE_H + halfH;
+            sprite.direction = -sprite.direction;
+          }
+          sprite.direction = ((sprite.direction % 360) + 360) % 360;
+        }
+        break;
+      }
+      case "sensing_distance": {
+        if (!sprite) return 0;
+        const targetName = this.getField(block, "SPRITE");
+        const target = this.getAllSprites().find((s) => s.name === targetName && s.id !== sprite.id);
+        if (!target) return 10000;
+        const dx = sprite.x - target.x;
+        const dy = sprite.y - target.y;
+        return Math.sqrt(dx * dx + dy * dy);
+      }
+      case "sensing_ask": {
+        const question = this.getField(block, "QUESTION");
+        if (this.ctx.askCallback) {
+          this.ctx.answer = await this.ctx.askCallback(question);
+        }
+        break;
+      }
+      case "sensing_answer": return this.ctx.answer;
+      case "sensing_timer": return (Date.now() - this.ctx.startTime) / 1000;
+      case "sensing_reset_timer": this.ctx.startTime = Date.now(); break;
+
+      // ============ OPERATORS ============
+      case "operators_add": return (await this.evalInput(block, "A", 0)) + (await this.evalInput(block, "B", 0));
+      case "operators_subtract": return (await this.evalInput(block, "A", 0)) - (await this.evalInput(block, "B", 0));
+      case "operators_multiply": return (await this.evalInput(block, "A", 0)) * (await this.evalInput(block, "B", 0));
+      case "operators_divide": {
+        const b = await this.evalInput(block, "B", 0);
+        const a = await this.evalInput(block, "A", 0);
+        return b === 0 ? 0 : a / b;
+      }
+      case "operators_random": {
+        const from = this.getNumField(block, "FROM");
+        const to = this.getNumField(block, "TO");
+        return from + Math.random() * (to - from);
+      }
+      case "operators_greater": return (await this.evalInput(block, "A", 0)) > (await this.evalInput(block, "B", 0));
+      case "operators_less": return (await this.evalInput(block, "A", 0)) < (await this.evalInput(block, "B", 0));
+      case "operators_equal": return (await this.evalInput(block, "A", 0)) === (await this.evalInput(block, "B", 0));
+      case "operators_and": return (await this.evalInput(block, "A", false)) && (await this.evalInput(block, "B", false));
+      case "operators_or": return (await this.evalInput(block, "A", false)) || (await this.evalInput(block, "B", false));
+      case "operators_not": return !(await this.evalInput(block, "A", false));
+      case "operators_join": return this.getField(block, "A") + this.getField(block, "B");
+      case "operators_length": return this.getField(block, "TEXT").length;
+      case "operators_mod": {
+        const b = this.getNumField(block, "B");
+        return b === 0 ? 0 : this.getNumField(block, "A") % b;
+      }
+      case "operators_round": return Math.round(this.getNumField(block, "NUM"));
+
+      // ============ VARIABLES ============
+      case "variables_set": {
+        const name = this.getField(block, "VAR");
+        const valStr = this.getField(block, "VALUE");
+        const val = isNaN(Number(valStr)) ? valStr : Number(valStr);
+        this.setVariable(name, val, sprite);
+        break;
+      }
+      case "variables_change": {
+        const name = this.getField(block, "VAR");
+        const current = this.getVariable(name, sprite);
+        const newVal = Number(current) + this.getNumField(block, "VALUE");
+        this.setVariable(name, newVal, sprite);
+        break;
+      }
+      case "variables_show": {
+        const name = this.getField(block, "VAR");
+        // Mark visible in project variables
+        const v = this.project.variables.find((v) => v.name === name);
+        if (v) v.visible = true;
+        break;
+      }
+      case "variables_hide": {
+        const name = this.getField(block, "VAR");
+        const v = this.project.variables.find((v) => v.name === name);
+        if (v) v.visible = false;
+        break;
+      }
+      case "variables_get": {
+        return this.getVariable(this.getField(block, "VAR"), sprite);
+      }
+      case "variables_create": {
+        const name = this.getField(block, "NAME");
+        if (!(name in this.ctx.variables)) this.ctx.variables[name] = 0;
+        break;
+      }
+
+      // ============ FUNCTIONS ============
+      case "procedures_def": return;
+      case "procedures_call": {
+        const name = this.getField(block, "NAME");
+        const defBlock = this.findFunctionDef(block.workspace, name);
+        if (defBlock) {
+          const fnSprite = sprite;
+          let current = defBlock.getNextBlock();
+          while (current && !this.ctx.stopAll) {
+            await this.executeBlock(current, fnSprite);
+            current = current.getNextBlock();
+          }
+        }
+        break;
+      }
+
+      // ============ DRAWING ============
+      case "drawing_pen_down": if (sprite) sprite.penDown = true; break;
+      case "drawing_pen_up": if (sprite) sprite.penDown = false; break;
+      case "drawing_set_color": if (sprite) sprite.penColor = this.getField(block, "COLOR"); break;
+      case "drawing_set_size": if (sprite) sprite.penSize = this.getNumField(block, "SIZE"); break;
+      case "drawing_clear": this.clearPen(); break;
+      case "drawing_stamp": if (sprite) this.stamp(sprite); break;
+
+      // ============ GAME ============
+      case "game_set_score": if (sprite) sprite.score = this.getNumField(block, "SCORE"); break;
+      case "game_change_score": if (sprite) sprite.score += this.getNumField(block, "VALUE"); break;
+      case "game_score": return sprite?.score ?? 0;
+      case "game_set_health": if (sprite) sprite.health = this.getNumField(block, "HEALTH"); break;
+      case "game_change_health": if (sprite) sprite.health += this.getNumField(block, "VALUE"); break;
+      case "game_set_lives": if (sprite) sprite.lives = this.getNumField(block, "LIVES"); break;
+      case "game_change_lives": if (sprite) sprite.lives += this.getNumField(block, "VALUE"); break;
+      case "game_set_gravity": if (sprite) sprite.gravity = this.getNumField(block, "GRAVITY"); break;
+      case "game_jump": {
+        if (sprite) sprite.vy = -this.getNumField(block, "POWER");
+        break;
+      }
+      case "game_apply_gravity": {
+        if (sprite) {
+          sprite.vy += sprite.gravity;
+          sprite.y += sprite.vy;
+        }
+        break;
+      }
+      case "game_game_over": this.ctx.gameOver = true; break;
+      case "game_level_complete": this.ctx.levelComplete = true; break;
+      case "game_move_player": {
+        if (sprite) {
+          const dir = this.getField(block, "DIR");
+          const speed = this.getNumField(block, "SPEED");
+          switch (dir) {
+            case "left": sprite.x -= speed; break;
+            case "right": sprite.x += speed; break;
+            case "up": sprite.y += speed; break;
+            case "down": sprite.y -= speed; break;
+          }
+        }
+        break;
+      }
+      case "game_random_move": {
+        if (sprite) {
+          const speed = this.getNumField(block, "SPEED");
+          const angle = Math.random() * Math.PI * 2;
+          sprite.x += Math.cos(angle) * speed;
+          sprite.y += Math.sin(angle) * speed;
+        }
+        break;
+      }
+
+      // ============ ADVANCED ============
+      case "advanced_js": {
+        try {
+          const code = this.getField(block, "CODE");
+          // eslint-disable-next-line no-new-func
+          Function(code)();
+        } catch (e) {
+          console.error("JS block error:", e);
+        }
+        break;
+      }
+      case "advanced_console_log": console.log(this.getField(block, "TEXT")); break;
+      case "advanced_list_create": {
+        const name = this.getField(block, "NAME");
+        if (!(name in this.ctx.lists)) this.ctx.lists[name] = [];
+        break;
+      }
+      case "advanced_list_add": {
+        const listName = this.getField(block, "LIST");
+        const item = this.getField(block, "ITEM");
+        if (!this.ctx.lists[listName]) this.ctx.lists[listName] = [];
+        this.ctx.lists[listName].push(isNaN(Number(item)) ? item : Number(item));
+        break;
+      }
+      case "advanced_list_length": {
+        const listName = this.getField(block, "LIST");
+        return this.ctx.lists[listName]?.length ?? 0;
+      }
+      case "advanced_math_func": {
+        const func = this.getField(block, "FUNC");
+        const num = this.getNumField(block, "NUM");
+        const mathFuncs: Record<string, (n: number) => number> = {
+          abs: Math.abs, floor: Math.floor, ceil: Math.ceil, sqrt: Math.sqrt,
+          sin: Math.sin, cos: Math.cos, tan: Math.tan,
+        };
+        return mathFuncs[func]?.(num) ?? 0;
+      }
+      case "advanced_wait_until": {
+        let cond = await this.evalInput(block, "CONDITION", false);
+        while (!cond && !this.ctx.stopAll) {
+          await this.frame();
+          cond = await this.evalInput(block, "CONDITION", false);
+        }
+        break;
+      }
+
+      default: break;
+    }
+    this.ctx.onStateChange();
+  }
+
+  private findFunctionDef(workspace: Blockly.Workspace, name: string): Blockly.Block | null {
+    const allBlocks = workspace.getAllBlocks(false);
+    return allBlocks.find((b) => b.type === "procedures_def" && b.getFieldValue("NAME") === name) ?? null;
+  }
+
+  private async runStatementStack(block: Blockly.Block | null | undefined, sprite: RuntimeSpriteState | null) {
+    let current = block;
+    while (current && !this.ctx.stopAll && !this.ctx.stopScript) {
+      await this.executeBlock(current, sprite);
+      current = current.getNextBlock();
+    }
+    this.ctx.stopScript = false;
+  }
+
+  private async evalInput(block: Blockly.Block, inputName: string, defaultValue: any): Promise<any> {
+    const inputBlock = block.getInput(inputName)?.connection?.targetBlock();
+    if (inputBlock) {
+      const spriteId = block.getCommentText?.() ?? "";
+      const inputSprite = this.ctx.sprites[spriteId] ?? null;
+      return await this.executeBlock(inputBlock, inputSprite);
+    }
+    return defaultValue;
+  }
+
+  private getNumField(block: Blockly.Block, name: string): number {
+    return Number(block.getFieldValue(name)) || 0;
+  }
+
+  private getField(block: Blockly.Block, name: string): string {
+    return String(block.getFieldValue(name) ?? "");
+  }
+
+  private getVariable(name: string, sprite: RuntimeSpriteState | null): any {
+    if (sprite && name in sprite.variables) return sprite.variables[name];
+    return this.ctx.variables[name] ?? 0;
+  }
+
+  private setVariable(name: string, value: any, sprite: RuntimeSpriteState | null) {
+    if (sprite && name in sprite.variables) sprite.variables[name] = value;
+    else this.ctx.variables[name] = value;
+  }
+
+  private checkCollision(a: RuntimeSpriteState, b: RuntimeSpriteState): boolean {
+    const aCostume = a.costumes[a.costumeIndex];
+    const bCostume = b.costumes[b.costumeIndex];
+    const aRad = (a.size / 100) * (aCostume?.width ?? 80) / 2;
+    const bRad = (b.size / 100) * (bCostume?.width ?? 80) / 2;
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy) < (aRad + bRad) * 0.7;
+  }
+
+  private broadcast(message: string, wait: boolean) {
+    // Trigger all matching event_when_receive blocks
+    // For now, we just queue it
+    this.ctx.broadcastHandlers.get(message)?.forEach((h) => h());
+  }
+
+  private playBeep(freq: number, duration: number) {
+    if (!this.ctx.audioCtx) {
+      this.ctx.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    const ctx = this.ctx.audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = freq;
+    osc.type = "sine";
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.start();
+    osc.stop(ctx.currentTime + duration);
+  }
+
+  private stopAllSounds() {
+    // Audio context sounds are short-lived and stop on their own
+  }
+
+  private clearPen() {
+    if (this.ctx.penCtx && this.ctx.penCanvas) {
+      this.ctx.penCtx.clearRect(0, 0, this.ctx.penCanvas.width, this.ctx.penCanvas.height);
+    }
+  }
+
+  private stamp(sprite: RuntimeSpriteState) {
+    // Simplified stamp - draws a circle at sprite position
+    if (!this.ctx.penCtx) return;
+    const ctx = this.ctx.penCtx;
+    ctx.fillStyle = sprite.penColor;
+    ctx.beginPath();
+    ctx.arc(sprite.x + 240, 180 - sprite.y, 20 * (sprite.size / 100), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private async wait(seconds: number) {
+    const ms = seconds * 1000;
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      if (this.ctx.stopAll) return;
+      await this.frame();
+    }
+  }
+
+  private frame(): Promise<void> {
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  }
+
+  private startGameLoop() {
+    if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+    this.lastTime = performance.now();
+    const loop = (time: number) => {
+      if (!this.ctx.running) return;
+      const dt = (time - this.lastTime) / 1000;
+      this.lastTime = time;
+      this.ctx.timer = (Date.now() - this.ctx.startTime) / 1000;
+      this.ctx.onStateChange();
+      this.animationFrame = requestAnimationFrame(loop);
+    };
+    this.animationFrame = requestAnimationFrame(loop);
+  }
+
+  stop() {
+    this.ctx.running = false;
+    this.ctx.stopAll = true;
+    if (this.animationFrame) {
+      cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = null;
+    }
+    this.runningScripts.forEach((s) => s.stop());
+    this.runningScripts = [];
+    this.stopAllSounds();
+    if (this.ctx.audioCtx) {
+      this.ctx.audioCtx.close();
+      this.ctx.audioCtx = null;
+    }
+  }
+
+  handleKeyDown(key: string) {
+    this.ctx.keysPressed.add(key);
+  }
+
+  handleKeyUp(key: string) {
+    this.ctx.keysPressed.delete(key);
+  }
+
+  handleMouseMove(x: number, y: number) {
+    this.ctx.mouseX = x;
+    this.ctx.mouseY = y;
+  }
+
+  handleMouseDown() {
+    this.ctx.mouseDown = true;
+  }
+
+  handleMouseUp() {
+    this.ctx.mouseDown = false;
+  }
+}
